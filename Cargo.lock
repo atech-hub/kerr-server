@@ -580,6 +580,8 @@ dependencies = [
  "bytemuck",
  "mimalloc",
  "pollster",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 

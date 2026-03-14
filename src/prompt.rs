@@ -1,16 +1,18 @@
 //! Chat formatting and tokenization — convert chat messages to token sequences.
 
 use std::collections::HashMap;
+use kerr_engine::bpe::BpeTokenizer;
 use kerr_engine::data::{Dataset, TokenMode, tokenize_words};
 
 use crate::api_types::ChatMessage;
 
-/// Vocabulary extracted from a Dataset for serving-time encode/decode.
+/// Vocabulary extracted from a Dataset or BPE tokenizer for serving-time encode/decode.
 pub struct Vocab {
     pub token_to_idx: HashMap<String, usize>,
     pub idx_to_token: Vec<String>,
     pub mode: TokenMode,
     pub vocab_size: usize,
+    pub bpe: Option<BpeTokenizer>,
 }
 
 impl Vocab {
@@ -21,6 +23,19 @@ impl Vocab {
             idx_to_token: dataset.idx_to_token.clone(),
             mode: dataset.mode,
             vocab_size: dataset.vocab_size,
+            bpe: None,
+        }
+    }
+
+    /// Create vocabulary from a BPE tokenizer (no data file needed).
+    pub fn from_bpe(bpe: BpeTokenizer) -> Self {
+        let vocab_size = bpe.vocab_size;
+        Self {
+            token_to_idx: HashMap::new(),
+            idx_to_token: Vec::new(),
+            mode: TokenMode::Bpe,
+            vocab_size,
+            bpe: Some(bpe),
         }
     }
 
@@ -38,25 +53,43 @@ impl Vocab {
                     .map(|t| *self.token_to_idx.get(t).unwrap_or(&0))
                     .collect()
             }
+            TokenMode::Bpe => {
+                self.bpe.as_ref().expect("BPE tokenizer missing").encode(text)
+            }
         }
     }
 
     /// Decode token indices back to text.
     pub fn decode(&self, tokens: &[usize]) -> String {
-        let sep = match self.mode {
-            TokenMode::Char => "",
-            TokenMode::Word => " ",
-        };
-        tokens.iter()
-            .map(|&t| {
-                if t < self.idx_to_token.len() {
-                    self.idx_to_token[t].as_str()
-                } else {
-                    "?"
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(sep)
+        match self.mode {
+            TokenMode::Char => {
+                tokens.iter()
+                    .map(|&t| {
+                        if t < self.idx_to_token.len() {
+                            self.idx_to_token[t].as_str()
+                        } else {
+                            "?"
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
+            TokenMode::Word => {
+                tokens.iter()
+                    .map(|&t| {
+                        if t < self.idx_to_token.len() {
+                            self.idx_to_token[t].as_str()
+                        } else {
+                            "?"
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            TokenMode::Bpe => {
+                self.bpe.as_ref().expect("BPE tokenizer missing").decode(tokens)
+            }
+        }
     }
 }
 
