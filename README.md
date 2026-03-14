@@ -102,6 +102,26 @@ Uses `model.forward()` (CPU inference path). No KV-cache — full context re-run
 - Rust nightly-2025-11-13 (matches kerr-engine toolchain)
 - kerr-engine repo at `../kerr-engine` (path dependency)
 
+## Contributing
+
+The maintainer (Marco Da Cunha) is an IT systems administrator, not a programmer. The server was built through collaboration with AI (Claude Desktop for architecture, Claude Code for implementation). This is stated openly.
+
+What this means for contributions:
+
+- **Main branch is protected.** All changes go through pull requests.
+- **Fork and branch.** Want to add KV-cache, improve sampling, add new endpoints? Fork the repo, create a branch, do your work, submit a PR.
+- **The validation gate is the review.** Every PR must demonstrate that the four endpoints still work correctly — health, models, non-streaming chat, and SSE streaming.
+- **The maintainer merges based on testing and description, not code review.** Be clear about what you changed and why.
+
+**Known targets for contributors:**
+- KV-cache for efficient generation at 768-dim+ (essential for production use)
+- Vocab embedded in checkpoint (eliminate the data file requirement at serve time)
+- BPE tokenizer support (needed for hybrid models using Qwen/Llama tokenizers)
+- GPU backend selection for inference (currently CPU only)
+- Model hot-reload without server restart
+
+---
+
 ## License
 
 Apache 2.0
