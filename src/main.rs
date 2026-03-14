@@ -34,6 +34,7 @@ fn main() {
         eprintln!("  --port N          Listen port (default: 8080)");
         eprintln!("  --host ADDR       Bind address (default: 127.0.0.1)");
         eprintln!("  --model-name S    Model name in responses (default: kerr-ode)");
+        eprintln!("  --api-key KEY     Require Bearer token auth (default: none)");
         eprintln!("  --word            Use word-level tokenizer\n");
         eprintln!("Architecture (v1 checkpoints only — v2 self-describes):");
         eprintln!("  --n-bands N       Harmonic frequency bands (default: 64)");
@@ -52,6 +53,7 @@ fn main() {
     let mut port: u16 = 8080;
     let mut host = "127.0.0.1".to_string();
     let mut model_name = "kerr-ode".to_string();
+    let mut api_key: Option<String> = None;
     let mut word_level = false;
     let mut config = ModelConfig::default_128();
     let mut has_arch_flags = false;
@@ -62,6 +64,7 @@ fn main() {
             "--port" => { i += 1; port = args[i].parse().expect("invalid port"); }
             "--host" => { i += 1; host = args[i].clone(); }
             "--model-name" => { i += 1; model_name = args[i].clone(); }
+            "--api-key" => { i += 1; api_key = Some(args[i].clone()); }
             "--word" => { word_level = true; }
             "--n-bands" => { i += 1; config.n_bands = args[i].parse().expect("invalid n-bands"); has_arch_flags = true; }
             "--n-head" => { i += 1; config.n_head = args[i].parse().expect("invalid n-head"); has_arch_flags = true; }
@@ -111,7 +114,7 @@ fn main() {
     let app_state = Arc::new(AppState {
         model: Arc::new(model),
         vocab: Arc::new(vocab),
-        config: ServerConfig { host, port, model_name },
+        config: ServerConfig { host, port, model_name, api_key },
     });
 
     // Start tokio runtime and run server
