@@ -1,0 +1,15 @@
+[package]
+name = "kerr-server"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "OpenAI-compatible API server for Kerr-ODE models"
+
+[dependencies]
+kerr-engine = { path = "../kerr-engine" }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tokio-stream = "0.1"
