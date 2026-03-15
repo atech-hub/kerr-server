@@ -29,23 +29,36 @@ pub struct TokenEvent {
     pub done: bool,
 }
 
+/// Memory offsets for injection into the forward pass.
+/// Pre-scaled by alpha, ready to add to ODE initial conditions.
+pub struct MemoryOffsets {
+    pub offsets: Vec<(Vec<f32>, Vec<f32>)>, // [(r_offset, s_offset)] per ODE layer
+}
+
 /// Generate all tokens at once (non-streaming).
 pub fn generate(
     model: &ModelWeights,
     prompt_tokens: &[usize],
     config: &GenerationConfig,
     vocab: &Vocab,
+    memory: Option<&MemoryOffsets>,
 ) -> GenerationResult {
     let mut rng = make_rng();
     let block_size = model.config.block_size;
     let mut tokens = prompt_tokens.to_vec();
     let mut generated = Vec::new();
 
+    // Build offset slices for forward_with_memory
+    let offset_slices: Option<Vec<(&[f32], &[f32])>> = memory.map(|m|
+        m.offsets.iter().map(|(r, s)| (r.as_slice(), s.as_slice())).collect()
+    );
+    let mem_arg = offset_slices.as_deref();
+
     for _ in 0..config.max_tokens {
         let start = if tokens.len() > block_size { tokens.len() - block_size } else { 0 };
         let context = &tokens[start..];
 
-        let logits_all = model.forward(context);
+        let logits_all = model.forward_with_memory(context, mem_arg);
         let mut logits = logits_all.last().unwrap().clone();
 
         if let Some(penalty) = config.repetition_penalty {
@@ -70,6 +83,7 @@ pub fn generate_streaming<F>(
     prompt_tokens: &[usize],
     config: &GenerationConfig,
     vocab: &Vocab,
+    memory: Option<&MemoryOffsets>,
     mut on_token: F,
 ) where
     F: FnMut(TokenEvent) -> bool,
@@ -78,11 +92,16 @@ pub fn generate_streaming<F>(
     let block_size = model.config.block_size;
     let mut tokens = prompt_tokens.to_vec();
 
+    let offset_slices: Option<Vec<(&[f32], &[f32])>> = memory.map(|m|
+        m.offsets.iter().map(|(r, s)| (r.as_slice(), s.as_slice())).collect()
+    );
+    let mem_arg = offset_slices.as_deref();
+
     for i in 0..config.max_tokens {
         let start = if tokens.len() > block_size { tokens.len() - block_size } else { 0 };
         let context = &tokens[start..];
 
-        let logits_all = model.forward(context);
+        let logits_all = model.forward_with_memory(context, mem_arg);
         let mut logits = logits_all.last().unwrap().clone();
 
         if let Some(penalty) = config.repetition_penalty {

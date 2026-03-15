@@ -304,10 +304,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerr-memory"
+version = "0.1.0"
+
+[[package]]
 name = "kerr-server"
 version = "0.2.0"
 dependencies = [
  "axum",
+ "kerr-memory",
  "serde",
  "serde_json",
  "tokio",

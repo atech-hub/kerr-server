@@ -43,13 +43,17 @@ fn main() {
     let mut api_key: Option<String> = None;
     let mut word_level = false;
     let mut bpe_path: Option<String> = None;
+    let mut memory_path: Option<String> = None;
     let mut config = ModelConfig::default_128();
     let mut has_arch_flags = false;
 
-    // First pass: find --bpe to determine if data arg is needed
+    // First pass: find --bpe and --memory before positional arg parsing
     for (i, arg) in args.iter().enumerate() {
         if arg == "--bpe" {
             bpe_path = args.get(i + 1).cloned();
+        }
+        if arg == "--memory" {
+            memory_path = args.get(i + 1).cloned();
         }
     }
 
@@ -79,6 +83,7 @@ fn main() {
             "--api-key" => { i += 1; api_key = Some(args[i].clone()); }
             "--word" => { word_level = true; }
             "--bpe" => { i += 1; } // already parsed in first pass
+            "--memory" => { i += 1; } // already parsed in first pass
             "--n-bands" => { i += 1; config.n_bands = args[i].parse().expect("invalid n-bands"); has_arch_flags = true; }
             "--n-head" => { i += 1; config.n_head = args[i].parse().expect("invalid n-head"); has_arch_flags = true; }
             "--n-layers" => { i += 1; config.n_layers = args[i].parse().expect("invalid n-layers"); has_arch_flags = true; }
@@ -132,10 +137,31 @@ fn main() {
         eprintln!("  Model was trained with different tokenizer. Results may be incorrect.");
     }
 
+    // Load or create wave memory
+    let memory = if let Some(ref path) = memory_path {
+        if std::path::Path::new(path).exists() {
+            println!("Loading wave memory from: {path}");
+            let mem = kerr_memory::file::load(path).expect("Failed to load memory file");
+            println!("  Memory: {} layers, {} bands, {} conversations",
+                mem.n_layers(), mem.n_bands, mem.n_convos);
+            Some(mem)
+        } else {
+            println!("Creating new wave memory: {path}");
+            let n_ode_layers = model.config.n_layers - 1; // Block 0 is PerBandLinear
+            let mem = kerr_memory::memory::WaveMemory::zeros(n_ode_layers, model.config.n_bands);
+            println!("  Memory: {} layers, {} bands (fresh)", n_ode_layers, model.config.n_bands);
+            Some(mem)
+        }
+    } else {
+        None
+    };
+
     let app_state = Arc::new(AppState {
         model: Arc::new(model),
         vocab: Arc::new(vocab),
         config: ServerConfig { host, port, model_name, api_key },
+        memory: std::sync::Mutex::new(memory),
+        memory_path: memory_path.clone(),
     });
 
     // Start tokio runtime and run server

@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api_types::*;
-use crate::inference::{self, GenerationConfig};
+use crate::inference::{self, GenerationConfig, MemoryOffsets};
 use crate::prompt;
 use crate::server::AppState;
 
@@ -70,6 +70,19 @@ pub async fn handle_chat_completion(
     }
 }
 
+/// Build MemoryOffsets from AppState (if memory is active).
+fn get_memory_offsets(state: &AppState) -> Option<MemoryOffsets> {
+    let guard = state.memory.lock().unwrap();
+    guard.as_ref().map(|mem| {
+        let alpha = mem.config.alpha;
+        MemoryOffsets {
+            offsets: mem.layers.iter()
+                .map(|l| l.scaled_offsets(alpha))
+                .collect(),
+        }
+    })
+}
+
 async fn handle_non_streaming(
     state: Arc<AppState>,
     prompt_tokens: Vec<usize>,
@@ -81,9 +94,10 @@ async fn handle_non_streaming(
     let prompt_len = prompt_tokens.len();
     let model = state.model.clone();
     let vocab = state.vocab.clone();
+    let mem_offsets = get_memory_offsets(&state);
 
     let result = tokio::task::spawn_blocking(move || {
-        inference::generate(&model, &prompt_tokens, &config, &vocab)
+        inference::generate(&model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref())
     })
     .await
     .unwrap();
@@ -146,9 +160,10 @@ async fn handle_streaming(
     let tx_clone = tx.clone();
     let req_id = request_id.clone();
     let mn = model_name.clone();
+    let mem_offsets = get_memory_offsets(&state);
 
     tokio::task::spawn_blocking(move || {
-        inference::generate_streaming(&model, &prompt_tokens, &config, &vocab, |event| {
+        inference::generate_streaming(&model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref(), |event| {
             let chunk = ChatCompletionChunk {
                 id: req_id.clone(),
                 object: "chat.completion.chunk".to_string(),

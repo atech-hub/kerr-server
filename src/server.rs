@@ -1,6 +1,6 @@
 //! HTTP server setup — Axum router, shared state, auth, graceful shutdown.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -9,6 +9,8 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use tokio::net::TcpListener;
+
+use kerr_memory::memory::WaveMemory;
 
 use crate::model::ModelWeights;
 
@@ -21,6 +23,10 @@ pub struct AppState {
     pub model: Arc<ModelWeights>,
     pub vocab: Arc<Vocab>,
     pub config: ServerConfig,
+    /// Wave memory state — None if --memory not specified.
+    pub memory: Mutex<Option<WaveMemory>>,
+    /// Path to save memory file on shutdown (if memory is active).
+    pub memory_path: Option<String>,
 }
 
 /// Server configuration from CLI.
@@ -73,6 +79,8 @@ pub async fn run(state: Arc<AppState>) {
     let port = state.config.port;
     let has_auth = state.config.api_key.is_some();
 
+    let state_for_shutdown = state.clone();
+
     // Protected routes (require API key if configured)
     let protected = Router::new()
         .route("/v1/chat/completions", post(handlers::handle_chat_completion))
@@ -111,6 +119,17 @@ pub async fn run(state: Arc<AppState>) {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+
+    // Save memory on shutdown if active
+    if let Some(ref path) = state_for_shutdown.memory_path {
+        let guard = state_for_shutdown.memory.lock().unwrap();
+        if let Some(ref mem) = *guard {
+            match kerr_memory::file::save(path, mem) {
+                Ok(()) => println!("  Memory saved: {path} ({} conversations)", mem.n_convos),
+                Err(e) => eprintln!("  Failed to save memory: {e}"),
+            }
+        }
+    }
 
     println!("  Server stopped.");
 }
