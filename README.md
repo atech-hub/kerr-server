@@ -1,6 +1,6 @@
 # kerr-server
 
-OpenAI-compatible API server for [Kerr-ODE](https://github.com/atech-hub/kerr-engine) models. Load a trained checkpoint, serve it via HTTP. Any chat UI that speaks the OpenAI protocol connects without modification.
+OpenAI-compatible API server for [Kerr-ODE](https://github.com/atech-hub/kerr-engine) models. Self-contained — no engine dependency, no GPU code. Load a trained checkpoint, serve it via HTTP, optionally accumulate wave memory across conversations. Any chat UI that speaks the OpenAI protocol connects without modification.
 
 ## Quick Start
 
@@ -16,6 +16,9 @@ kerr-server checkpoint.bin data/input.txt --port 8080
 
 # Serve with BPE tokenizer (no data file needed)
 kerr-server checkpoint.bin --bpe tokenizer.json --port 8080
+
+# Serve with wave memory (accumulates experience across conversations)
+kerr-server checkpoint.bin data/input.txt --memory memory.kwmf --port 8080
 
 # Serve with API key authentication
 kerr-server checkpoint.bin data/input.txt --port 8080 --api-key sk-your-secret-key
@@ -48,6 +51,11 @@ Server:
   --host ADDR       Bind address (default: 127.0.0.1)
   --model-name S    Model name in API responses (default: kerr-ode)
   --api-key KEY     Require bearer token auth on /v1/* endpoints (no flag = no auth)
+
+Wave Memory:
+  --memory FILE     Load/create a .kwmf wave memory file. Memory offsets inject into
+                    Kerr-ODE initial conditions during inference. Accumulates experience
+                    across conversations and saves after each one. Omit for no memory.
 
 Architecture (v1 checkpoints only — v2 self-describes):
   --n-bands N       Harmonic frequency bands (default: 64)
@@ -98,30 +106,59 @@ Any chat application that supports OpenAI-compatible endpoints can connect to th
 
 **SillyTavern / continue.dev / any OpenAI client:** Point the API base URL to `http://127.0.0.1:8080/v1`. Set the API key if auth is enabled.
 
+## Wave Memory
+
+The `--memory` flag enables persistent experience accumulation across conversations. The model weights never change — a separate file (typically 1.5KB) shifts the Kerr-ODE's starting position on the unit circle.
+
+```bash
+# First conversation — creates fresh memory file
+kerr-server checkpoint.bin data/input.txt --memory memory.kwmf
+
+# Subsequent conversations — loads and accumulates
+kerr-server checkpoint.bin data/input.txt --memory memory.kwmf
+
+# Inspect what accumulated
+kerr-memory census memory.kwmf
+```
+
+How it works: during inference, memory offsets add to the ODE initial conditions (`Z_k = input_k + α · memory_k`). After each conversation, the ODE final states feed an exponential moving average that merges into the persistent file. The Kerr dynamics do the rest — self-phase modulation amplifies resonant memories, cross-phase coupling associates related bands, damping forgets what's not reinforced.
+
+Validated findings: stochastic resonance (α=0.05 improves perplexity by 8.8%), stable accumulation over 20 conversations, bit-identical reset on deletion, anomaly detection catches spikes before affecting output. Word-level model shows semantic tone influence — love memory produces "fair", "give thee" while war memory produces "dishonour", "death" from the same prompt.
+
+See [kerr-memory](https://github.com/atech-hub/kerr-memory) for the library, CLI tools, and full investigation results.
+
+---
+
 ## Architecture
 
-~750 lines across 6 modules:
+~1,900 lines across 10 modules. Self-contained — the forward pass is built in, no kerr-engine dependency.
 
-- `main.rs` — CLI parsing, checkpoint + vocab loading, server startup
+- `model.rs` — Forward pass, weight structs, Kerr-ODE with memory injection
+- `checkpoint.rs` — Checkpoint loader (v1 and v2 formats)
+- `data.rs` — Character and word tokenizers
+- `bpe.rs` — BPE tokenizer (HuggingFace tokenizer.json)
+- `rng.rs` — Deterministic PRNG for sampling
 - `server.rs` — Axum router, shared state, graceful shutdown (Ctrl+C)
 - `api_types.rs` — OpenAI protocol types (pure serde structs)
 - `inference.rs` — Token generation with temperature/top-k/top-p/repetition penalty sampling
 - `prompt.rs` — Vocabulary extraction, text encode/decode, chat message formatting
-- `handlers.rs` — Request handlers, SSE streaming
+- `handlers.rs` — Request handlers, SSE streaming, memory accumulation
 
-Uses `model.forward()` (CPU inference path). No KV-cache — full context re-run per token. Fast at 128-dim.
+Uses `model.forward()` / `forward_with_memory()` (CPU inference path). No KV-cache — full context re-run per token. Fast at 128-dim.
 
 ## Dependencies
 
-- [kerr-engine](https://github.com/atech-hub/kerr-engine) — model weights, checkpoint loader, tokenizer
+- [kerr-memory](https://github.com/atech-hub/kerr-memory) — wave memory state management (optional, for `--memory` flag)
 - [axum](https://github.com/tokio-rs/axum) 0.8 — HTTP framework
 - [tokio](https://tokio.rs) — async runtime
 - serde, serde_json, uuid, tokio-stream
 
+No kerr-engine dependency. The forward pass (model.rs, checkpoint.rs, data.rs, bpe.rs, rng.rs) is built into the server. No GPU code, no wgpu, no shaders.
+
 ## Requirements
 
-- Rust nightly-2025-11-13 (matches kerr-engine toolchain)
-- kerr-engine repo at `../kerr-engine` (path dependency)
+- Rust nightly-2025-11-13
+- kerr-memory repo at `../kerr-memory` (path dependency, for `--memory` support)
 
 ## Contributing
 
@@ -146,6 +183,7 @@ What this means for contributions:
 ## Related
 
 - [Kerr Engine](https://github.com/atech-hub/kerr-engine) — Training engine that produces the checkpoints this server serves (public, Apache 2.0)
+- [Kerr Memory](https://github.com/atech-hub/kerr-memory) — Wave memory library used by the `--memory` flag (public, Apache 2.0)
 - [Wave Coherence as a Computational Primitive](https://github.com/atech-hub/Wave-Coherence-as-a-Computational-Primitive) — The parent research project (public, MIT)
 
 ---
