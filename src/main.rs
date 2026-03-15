@@ -120,7 +120,7 @@ fn main() {
         let dp = data_path.as_ref().unwrap();
         println!("Loading vocabulary from: {dp}");
         let dataset = if word_level {
-            Dataset::from_file_words(dp, 0.9, 1)
+            Dataset::from_file_words(dp, 0.9, 3)
         } else {
             Dataset::from_file(dp)
         };
