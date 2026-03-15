@@ -8,31 +8,46 @@ OpenAI-compatible API server for [Kerr-ODE](https://github.com/atech-hub/kerr-en
 # Build
 cargo build --release
 
+# See all options
+kerr-server --help
+
 # Serve a model (v2 checkpoint — self-describing, no config flags needed)
 kerr-server checkpoint.bin data/input.txt --port 8080
+
+# Serve with BPE tokenizer (no data file needed)
+kerr-server checkpoint.bin --bpe tokenizer.json --port 8080
+
+# Serve with API key authentication
+kerr-server checkpoint.bin data/input.txt --port 8080 --api-key sk-your-secret-key
 
 # Test
 curl http://localhost:8080/health
 curl http://localhost:8080/v1/models
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-secret-key" \
   -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":64}'
 ```
 
 ## Usage
 
 ```
-kerr-server <checkpoint> <data> [options]
+kerr-server <checkpoint> [data] [options]
 
 Arguments:
   <checkpoint>      Path to checkpoint file (.bin)
-  <data>            Path to training data (for vocabulary)
+  [data]            Path to training data (for vocabulary — optional with --bpe)
 
-Options:
+Tokenizer (one of):
+  [data]            Character/word vocab extracted from training data
+  --bpe FILE        BPE tokenizer from HuggingFace tokenizer.json (Qwen, Llama, GPT-2)
+  --word            Use word-level tokenizer (with data file)
+
+Server:
   --port N          Listen port (default: 8080)
   --host ADDR       Bind address (default: 127.0.0.1)
   --model-name S    Model name in API responses (default: kerr-ode)
-  --word            Use word-level tokenizer
+  --api-key KEY     Require bearer token auth on /v1/* endpoints (no flag = no auth)
 
 Architecture (v1 checkpoints only — v2 self-describes):
   --n-bands N       Harmonic frequency bands (default: 64)
@@ -61,25 +76,31 @@ Checkpoints saved by kerr-engine v0.2.0+ use v2 format. Older v1 checkpoints are
 
 ## Endpoints
 
-**POST /v1/chat/completions** — OpenAI-compatible chat completion
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/v1/chat/completions` | POST | Yes | OpenAI-compatible chat completion |
+| `/v1/models` | GET | Yes | List available models |
+| `/health` | GET | No | Server health check with model info |
 
-Request fields: `messages` (required), `temperature`, `top_p`, `max_tokens`, `stream`, `top_k`, `repetition_penalty`
+**POST /v1/chat/completions** request fields: `messages` (required), `temperature`, `top_p`, `max_tokens`, `stream`, `top_k`, `repetition_penalty`.
 
-Non-streaming returns JSON. Streaming (`"stream": true`) returns Server-Sent Events.
+Non-streaming returns JSON. Streaming (`"stream": true`) returns Server-Sent Events with `data: {chunk}\n\n` format, ending with `data: [DONE]\n\n`.
 
-**GET /v1/models** — List available models
-
-**GET /health** — Server health check with model info
+**Auth:** When `--api-key` is set, all `/v1/*` endpoints require `Authorization: Bearer <key>` header. `/health` is always open (for load balancers and monitoring).
 
 ## Connecting Chat UIs
 
-**LM Studio:** Settings → Override Base URL → `http://127.0.0.1:8080/v1`. Select any model from dropdown — the server uses its loaded model regardless of name.
+Any chat application that supports OpenAI-compatible endpoints can connect to the Kerr Server.
 
-**Open WebUI / SillyTavern / continue.dev:** Point the OpenAI API base URL to `http://127.0.0.1:8080/v1`. Put any string in the API key field.
+**LM Studio (verified):** Install the `openai-compat-endpoint` plugin from the LM Studio plugin store. In the chat panel, set "Override Base URL" to `http://127.0.0.1:8080/v1`. Select any model from the dropdown — the server uses its loaded model regardless of the name sent in the request. Put your API key in the "OpenAI API Key" field (or any string if auth is disabled). Tested and verified with LM Studio 0.4.6 — a 354K parameter Shakespeare model responded through the GPT-4.1 label.
+
+**Open WebUI:** Settings → Connections → add `http://127.0.0.1:8080/v1` as an OpenAI endpoint.
+
+**SillyTavern / continue.dev / any OpenAI client:** Point the API base URL to `http://127.0.0.1:8080/v1`. Set the API key if auth is enabled.
 
 ## Architecture
 
-~640 lines across 6 modules:
+~750 lines across 6 modules:
 
 - `main.rs` — CLI parsing, checkpoint + vocab loading, server startup
 - `server.rs` — Axum router, shared state, graceful shutdown (Ctrl+C)
@@ -116,19 +137,27 @@ What this means for contributions:
 **Known targets for contributors:**
 - KV-cache for efficient generation at 768-dim+ (essential for production use)
 - Vocab embedded in checkpoint (eliminate the data file requirement at serve time)
-- BPE tokenizer support (needed for hybrid models using Qwen/Llama tokenizers)
 - GPU backend selection for inference (currently CPU only)
 - Model hot-reload without server restart
+- Concurrent request handling (currently sequential inference)
+
+---
+
+## Related
+
+- [Kerr Engine](https://github.com/atech-hub/kerr-engine) — Training engine that produces the checkpoints this server serves (public, Apache 2.0)
+- [Wave Coherence as a Computational Primitive](https://github.com/atech-hub/Wave-Coherence-as-a-Computational-Primitive) — The parent research project (public, MIT)
 
 ---
 
 ## License
 
-Apache 2.0
+Apache 2.0. See [LICENSE](LICENSE).
 
 ## Credits
 
-- **Marco Da Cunha (atech-hub):** Architecture, direction
-- **Claude (Anthropic):** Implementation
+- **Marco Da Cunha** — Architecture, direction, pattern recognition
+- **Claude Desktop (Opus)** — Architecture design, documentation
+- **Claude Code** — Implementation, testing
 
 Part of the [Wave Coherence as a Computational Primitive](https://github.com/atech-hub/Wave-Coherence-as-a-Computational-Primitive) project.
