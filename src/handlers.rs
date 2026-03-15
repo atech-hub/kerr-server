@@ -83,6 +83,44 @@ fn get_memory_offsets(state: &AppState) -> Option<MemoryOffsets> {
     })
 }
 
+/// Update persistent memory after a conversation.
+/// Extracts ODE states from the generated sequence and merges via EMA.
+fn update_memory(state: &AppState, all_tokens: &[usize], mem_offsets: Option<&MemoryOffsets>) {
+    let mut guard = state.memory.lock().unwrap();
+    let Some(ref mut memory) = *guard else { return };
+
+    // Build offset slices for extract_ode_states
+    let offset_slices: Option<Vec<(&[f32], &[f32])>> = mem_offsets.map(|m|
+        m.offsets.iter().map(|(r, s)| (r.as_slice(), s.as_slice())).collect()
+    );
+    let mem_arg = offset_slices.as_deref();
+
+    // Extract ODE states (truncate to block_size)
+    let block_size = state.model.config.block_size;
+    let start = if all_tokens.len() > block_size { all_tokens.len() - block_size } else { 0 };
+    let ode_states = state.model.extract_ode_states(&all_tokens[start..], mem_arg);
+
+    // Merge into persistent memory using beta
+    let beta = memory.config.beta;
+    let w = 1.0 - beta;
+    for (layer_idx, (r_avg, s_avg)) in ode_states.iter().enumerate() {
+        if layer_idx >= memory.layers.len() { break; }
+        let n = memory.n_bands.min(r_avg.len());
+        for k in 0..n {
+            memory.layers[layer_idx].r[k] = beta * memory.layers[layer_idx].r[k] + w * r_avg[k];
+            memory.layers[layer_idx].s[k] = beta * memory.layers[layer_idx].s[k] + w * s_avg[k];
+        }
+    }
+    memory.n_convos += 1;
+
+    // Auto-save after each conversation
+    if let Some(ref path) = state.memory_path {
+        if let Err(e) = kerr_memory::file::save(path, memory) {
+            eprintln!("  [memory save failed: {e}]");
+        }
+    }
+}
+
 async fn handle_non_streaming(
     state: Arc<AppState>,
     prompt_tokens: Vec<usize>,
@@ -95,12 +133,19 @@ async fn handle_non_streaming(
     let model = state.model.clone();
     let vocab = state.vocab.clone();
     let mem_offsets = get_memory_offsets(&state);
+    let prompt_for_memory = prompt_tokens.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         inference::generate(&model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref())
     })
     .await
     .unwrap();
+
+    // Update memory with full conversation (prompt + generated)
+    let mem_offsets_for_update = get_memory_offsets(&state);
+    let mut all_tokens = prompt_for_memory;
+    all_tokens.extend(&result.tokens);
+    update_memory(&state, &all_tokens, mem_offsets_for_update.as_ref());
 
     let response = ChatCompletionResponse {
         id: request_id,
@@ -162,6 +207,8 @@ async fn handle_streaming(
     let mn = model_name.clone();
     let mem_offsets = get_memory_offsets(&state);
 
+    // Note: memory accumulation not yet wired for streaming mode.
+    // Non-streaming requests update memory after each conversation.
     tokio::task::spawn_blocking(move || {
         inference::generate_streaming(&model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref(), |event| {
             let chunk = ChatCompletionChunk {
