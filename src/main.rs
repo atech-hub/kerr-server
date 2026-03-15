@@ -8,18 +8,21 @@
 //! BPE mode (--bpe tokenizer.json) does not require a data file.
 
 mod api_types;
+mod bpe;
+mod checkpoint;
+mod data;
 mod handlers;
 mod inference;
+mod model;
 mod prompt;
+mod rng;
 mod server;
 
 use std::sync::Arc;
 
-use kerr_engine::bpe::BpeTokenizer;
-use kerr_engine::checkpoint;
-use kerr_engine::data::Dataset;
-use kerr_engine::model::ModelConfig;
-
+use crate::bpe::BpeTokenizer;
+use crate::data::Dataset;
+use crate::model::ModelConfig;
 use crate::prompt::Vocab;
 use crate::server::{AppState, ServerConfig};
 
@@ -92,16 +95,14 @@ fn main() {
     // Load model from checkpoint
     // v2 checkpoints auto-detect config; v1 uses CLI flags or default_128
     println!("Loading checkpoint: {checkpoint_path}");
-    let state = if has_arch_flags {
+    let model = if has_arch_flags {
         checkpoint::load_with_config(checkpoint_path, config)
     } else {
         checkpoint::load(checkpoint_path)
-    };
-    let state = state.expect("Failed to load checkpoint");
-    let model = state.model;
+    }.expect("Failed to load checkpoint");
     println!("  Model: {} layers, {} embd ({} bands), {} vocab, {} params",
         model.config.n_layers, model.config.n_embd(), model.config.n_bands,
-        model.vocab_size, kerr_engine::optim::count_params(&model));
+        model.vocab_size, crate::checkpoint::count_params(&model));
 
     // Load vocabulary
     let vocab = if let Some(ref bpe_file) = bpe_path {

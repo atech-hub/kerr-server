@@ -1,8 +1,8 @@
 //! Chat formatting and tokenization — convert chat messages to token sequences.
 
 use std::collections::HashMap;
-use kerr_engine::bpe::BpeTokenizer;
-use kerr_engine::data::{Dataset, TokenMode, tokenize_words};
+use crate::bpe::BpeTokenizer;
+use crate::data::{Dataset, TokenMode, tokenize_words};
 
 use crate::api_types::ChatMessage;
 

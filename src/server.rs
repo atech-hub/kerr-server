@@ -10,7 +10,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use tokio::net::TcpListener;
 
-use kerr_engine::model::ModelWeights;
+use crate::model::ModelWeights;
 
 use crate::api_types::{ErrorResponse, ErrorDetail};
 use crate::handlers;

@@ -3,8 +3,8 @@
 //! Uses model.forward() (inference-only CPU path in model.rs).
 //! No KV-cache in v0.1 — re-runs full forward per token.
 
-use kerr_engine::model::ModelWeights;
-use kerr_engine::rng::Rng;
+use crate::model::ModelWeights;
+use crate::rng::Rng;
 
 use crate::prompt::Vocab;
 
