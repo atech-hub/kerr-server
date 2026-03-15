@@ -173,7 +173,7 @@ fn main() {
 }
 
 fn print_help() {
-    println!("kerr-server v0.2.0 — OpenAI-compatible API for Kerr-ODE models");
+    println!("kerr-server v0.3.0 — OpenAI-compatible API for Kerr-ODE models");
     println!();
     println!("USAGE:");
     println!("    kerr-server <CHECKPOINT> [DATA] [OPTIONS]");
@@ -195,6 +195,10 @@ fn print_help() {
     println!("    --api-key KEY   Require Bearer token authentication. Clients must send");
     println!("                    'Authorization: Bearer <KEY>' header. The /health endpoint");
     println!("                    stays open without auth.              [default: none]");
+    println!("    --memory FILE   Load/save wave memory state (.kwmf). Memory offsets inject");
+    println!("                    into Kerr-ODE initial conditions. Accumulates experience");
+    println!("                    across conversations. Auto-saves after each request.");
+    println!("                    Creates fresh file if it doesn't exist. [default: none]");
     println!();
     println!("TOKENIZER:");
     println!("    --word          Word-level tokenization. Must match the mode used during");
@@ -235,6 +239,9 @@ fn print_help() {
     println!();
     println!("    # Listen on all interfaces (LAN access)");
     println!("    kerr-server checkpoint_final.bin data/input.txt --host 0.0.0.0");
+    println!();
+    println!("    # Serve with wave memory (accumulates experience across conversations)");
+    println!("    kerr-server checkpoint_final.bin data/input.txt --memory memory.kwmf");
     println!();
     println!("    # v1 checkpoint with explicit architecture");
     println!("    kerr-server old_checkpoint.bin data/input.txt --n-bands 384 --n-head 12");
