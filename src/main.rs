@@ -27,27 +27,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 || args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("kerr-server — OpenAI-compatible API for Kerr-ODE models\n");
-        eprintln!("Usage: kerr-server <checkpoint> [data] [options]\n");
-        eprintln!("Arguments:");
-        eprintln!("  <checkpoint>      Path to checkpoint file (.bin)");
-        eprintln!("  <data>            Path to training data (for vocabulary)");
-        eprintln!("                    Not needed with --bpe\n");
-        eprintln!("Options:");
-        eprintln!("  --port N          Listen port (default: 8080)");
-        eprintln!("  --host ADDR       Bind address (default: 127.0.0.1)");
-        eprintln!("  --model-name S    Model name in responses (default: kerr-ode)");
-        eprintln!("  --api-key KEY     Require Bearer token auth (default: none)");
-        eprintln!("  --word            Use word-level tokenizer");
-        eprintln!("  --bpe FILE        Use BPE tokenizer from tokenizer.json\n");
-        eprintln!("Architecture (v1 checkpoints only — v2 self-describes):");
-        eprintln!("  --n-bands N       Harmonic frequency bands (default: 64)");
-        eprintln!("  --n-head N        Attention heads (default: 4)");
-        eprintln!("  --n-layers N      Transformer blocks (default: 4)");
-        eprintln!("  --maestro-dim N   Maestro bottleneck width (default: 16)");
-        eprintln!("  --block-size N    Max sequence length (default: 256)");
-        eprintln!("  --rk4-steps N     ODE integration steps (default: 8)");
-        std::process::exit(1);
+        print_help();
+        std::process::exit(if args.len() < 2 { 1 } else { 0 });
     }
 
     let checkpoint_path = &args[1];
@@ -162,4 +143,86 @@ fn main() {
         .build()
         .unwrap()
         .block_on(server::run(app_state));
+}
+
+fn print_help() {
+    println!("kerr-server v0.2.0 — OpenAI-compatible API for Kerr-ODE models");
+    println!();
+    println!("USAGE:");
+    println!("    kerr-server <CHECKPOINT> [DATA] [OPTIONS]");
+    println!();
+    println!("ARGUMENTS:");
+    println!("    CHECKPOINT      Path to a .bin checkpoint file trained by kerr-engine.");
+    println!("                    v2 checkpoints are self-describing (architecture stored");
+    println!("                    in the header). v1 checkpoints need --n-bands etc.");
+    println!();
+    println!("    DATA            Path to the training data file (for vocabulary).");
+    println!("                    Required for char/word modes — the server rebuilds the");
+    println!("                    token mapping from this file. Not needed with --bpe.");
+    println!();
+    println!("SERVER:");
+    println!("    --port N        Listen port                          [default: 8080]");
+    println!("    --host ADDR     Bind address. Use 0.0.0.0 to listen  [default: 127.0.0.1]");
+    println!("                    on all interfaces (LAN access).");
+    println!("    --model-name S  Model name returned in API responses  [default: kerr-ode]");
+    println!("    --api-key KEY   Require Bearer token authentication. Clients must send");
+    println!("                    'Authorization: Bearer <KEY>' header. The /health endpoint");
+    println!("                    stays open without auth.              [default: none]");
+    println!();
+    println!("TOKENIZER:");
+    println!("    --word          Word-level tokenization. Must match the mode used during");
+    println!("                    training. Requires the DATA argument.");
+    println!();
+    println!("    --bpe FILE      BPE subword tokenization from a HuggingFace tokenizer.json.");
+    println!("                    Must match the tokenizer used during training. The DATA");
+    println!("                    argument is not needed — vocab comes from the tokenizer file.");
+    println!();
+    println!("    (default)       Character-level tokenization. Requires the DATA argument.");
+    println!();
+    println!("ARCHITECTURE (v1 checkpoints only — v2 self-describes):");
+    println!("    These flags are only needed for v1 checkpoints that don't store their");
+    println!("    architecture in the header. v2 checkpoints (saved by kerr-engine v0.2+)");
+    println!("    auto-detect all of these.");
+    println!();
+    println!("    --n-bands N     Harmonic frequency bands              [default: 64]");
+    println!("    --n-head N      Attention heads                       [default: 4]");
+    println!("    --n-layers N    Transformer blocks                    [default: 4]");
+    println!("    --maestro-dim N Maestro bottleneck width               [default: 16]");
+    println!("    --block-size N  Max sequence length                    [default: 256]");
+    println!("    --rk4-steps N   ODE integration steps per layer        [default: 8]");
+    println!();
+    println!("ENDPOINTS:");
+    println!("    POST /v1/chat/completions    Chat completions (JSON or SSE streaming)");
+    println!("    GET  /v1/models              List available models");
+    println!("    GET  /health                 Health check (no auth required)");
+    println!();
+    println!("EXAMPLES:");
+    println!("    # Serve a char-level Shakespeare model");
+    println!("    kerr-server checkpoint_final.bin data/input.txt");
+    println!();
+    println!("    # Serve with BPE tokenizer (no data file needed)");
+    println!("    kerr-server checkpoint_final.bin --bpe tokenizer.json");
+    println!();
+    println!("    # Custom port with API key authentication");
+    println!("    kerr-server checkpoint_final.bin data/input.txt --port 3000 --api-key mysecret");
+    println!();
+    println!("    # Listen on all interfaces (LAN access)");
+    println!("    kerr-server checkpoint_final.bin data/input.txt --host 0.0.0.0");
+    println!();
+    println!("    # v1 checkpoint with explicit architecture");
+    println!("    kerr-server old_checkpoint.bin data/input.txt --n-bands 384 --n-head 12");
+    println!();
+    println!("CONNECTING CHAT UIs:");
+    println!("    Any client that speaks the OpenAI protocol can connect:");
+    println!("    - LM Studio: Settings > Local Server > set endpoint to http://127.0.0.1:8080");
+    println!("    - Open WebUI: Add connection with base URL http://127.0.0.1:8080");
+    println!("    - curl:");
+    println!("        curl http://127.0.0.1:8080/v1/chat/completions \\");
+    println!("          -H 'Content-Type: application/json' \\");
+    println!("          -d '{{\"model\":\"kerr-ode\",\"messages\":[{{\"role\":\"user\",\"content\":\"Hello\"}}]}}'");
+    println!();
+    println!("    Verified with LM Studio 0.4.6. Streaming and non-streaming both supported.");
+    println!();
+    println!("SOURCE: https://github.com/atech-hub/kerr-server");
+    println!("ENGINE: https://github.com/atech-hub/kerr-engine");
 }
