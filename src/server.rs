@@ -27,6 +27,8 @@ pub struct AppState {
     pub memory: Mutex<Option<WaveMemory>>,
     /// Path to save memory file on shutdown (if memory is active).
     pub memory_path: Option<String>,
+    /// GPU inference enabled (requires --features gpu build).
+    pub use_gpu: bool,
 }
 
 /// Server configuration from CLI.

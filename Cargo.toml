@@ -5,7 +5,12 @@ edition = "2024"
 license = "Apache-2.0"
 description = "OpenAI-compatible API server for Kerr-ODE models"
 
+[features]
+default = []
+gpu = ["kerr-engine"]
+
 [dependencies]
+kerr-engine = { path = "../kerr-engine", optional = true }
 kerr-memory = { path = "../kerr-memory" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }

@@ -18,6 +18,9 @@ mod prompt;
 mod rng;
 mod server;
 
+#[cfg(feature = "gpu")]
+mod gpu_forward;
+
 use std::sync::Arc;
 
 use crate::bpe::BpeTokenizer;
@@ -44,6 +47,7 @@ fn main() {
     let mut word_level = false;
     let mut bpe_path: Option<String> = None;
     let mut memory_path: Option<String> = None;
+    let mut use_gpu = false;
     let mut config = ModelConfig::default_128();
     let mut has_arch_flags = false;
 
@@ -82,6 +86,7 @@ fn main() {
             "--model-name" => { i += 1; model_name = args[i].clone(); }
             "--api-key" => { i += 1; api_key = Some(args[i].clone()); }
             "--word" => { word_level = true; }
+            "--gpu" => { use_gpu = true; }
             "--bpe" => { i += 1; } // already parsed in first pass
             "--memory" => { i += 1; } // already parsed in first pass
             "--n-bands" => { i += 1; config.n_bands = args[i].parse().expect("invalid n-bands"); has_arch_flags = true; }
@@ -156,12 +161,26 @@ fn main() {
         None
     };
 
+    // GPU inference check
+    #[cfg(not(feature = "gpu"))]
+    if use_gpu {
+        eprintln!("WARNING: --gpu flag requires server compiled with --features gpu");
+        eprintln!("  Rebuild with: cargo build --release --features gpu");
+        eprintln!("  Falling back to CPU inference.");
+    }
+
+    #[cfg(feature = "gpu")]
+    if use_gpu {
+        println!("  GPU inference: enabled (compiled with --features gpu)");
+    }
+
     let app_state = Arc::new(AppState {
         model: Arc::new(model),
         vocab: Arc::new(vocab),
         config: ServerConfig { host, port, model_name, api_key },
         memory: std::sync::Mutex::new(memory),
         memory_path: memory_path.clone(),
+        use_gpu,
     });
 
     // Start tokio runtime and run server
