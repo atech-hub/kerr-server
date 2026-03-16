@@ -146,6 +146,8 @@ See [kerr-memory](https://github.com/atech-hub/kerr-memory) for the library, CLI
 
 Uses `model.forward()` / `forward_with_memory()` (CPU inference path). No KV-cache — full context re-run per token. Fast at 128-dim.
 
+**Scale limitation:** The server runs CPU-only inference. At 128-dim this is instant (~1ms per token). At 768-dim this is ~1.7s per token — a 100-token response takes nearly 3 minutes, which is impractical for chat. GPU inference is not implemented. If you need to serve models larger than 128-dim, the server needs GPU inference support (contributor target).
+
 ## Dependencies
 
 - [kerr-memory](https://github.com/atech-hub/kerr-memory) — wave memory state management (optional, for `--memory` flag)
@@ -171,10 +173,11 @@ What this means for contributions:
 - **The validation gate is the review.** Every PR must demonstrate that the four endpoints still work correctly — health, models, non-streaming chat, and SSE streaming.
 - **The maintainer merges based on testing and description, not code review.** Be clear about what you changed and why.
 
-**Known targets for contributors:**
-- KV-cache for efficient generation at 768-dim+ (essential for production use)
+**Known targets for contributors (priority order):**
+- **GPU inference** (critical) — the server is CPU-only. At 768-dim, inference is ~1.7s per token, making chat impractical. This is the #1 blocker for serving larger models.
+- **KV-cache** (critical at scale) — without it, the full context is recomputed per token. At 128-dim this doesn't matter. At 768-dim+ it's the difference between usable and unusable.
 - Vocab embedded in checkpoint (eliminate the data file requirement at serve time)
-- GPU backend selection for inference (currently CPU only)
+- Streaming memory accumulation (currently only non-streaming requests update memory)
 - Model hot-reload without server restart
 - Concurrent request handling (currently sequential inference)
 
