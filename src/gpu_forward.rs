@@ -1,28 +1,24 @@
-//! GPU-accelerated forward pass — optional, compiled with `--features gpu`.
+//! GPU-accelerated forward pass using the server's own GpuAccelerator.
 //!
-//! Uses kerr-engine's ComputeBackend for matmul-heavy operations.
-//! The Kerr-ODE step and memory injection stay on CPU (they're O(n_bands),
-//! not the bottleneck). The attention projections are the hotspot at 768-dim+.
+//! No dependency on kerr-engine. Uses gpu.rs for matmul dispatch.
+//! The Kerr-ODE, layer norm, and attention scores stay on CPU
+//! (they're O(n) or memory-bound, not the bottleneck at 768-dim+).
 
-use kerr_engine::backend::{self, ComputeBackend};
-
+use crate::gpu::GpuAccelerator;
 use crate::model::*;
 
 /// GPU-backed forward pass with optional wave memory injection.
-///
-/// Uses the engine's ComputeBackend for linear projections (O(n²)),
-/// keeps ODE integration and memory injection on CPU (O(n)).
 pub fn forward_with_memory_gpu(
     model: &ModelWeights,
     tokens: &[usize],
     memory_offsets: Option<&[(&[f32], &[f32])]>,
-    backend: &dyn ComputeBackend,
+    gpu: &mut GpuAccelerator,
 ) -> Vec<Vec<f32>> {
     let t = tokens.len();
     let n_embd = model.config.n_embd();
     assert!(t <= model.config.block_size);
 
-    // Embedding + positional encoding
+    // Embedding + positional encoding (CPU — lookup, not compute)
     let mut hidden: Vec<Vec<f32>> = Vec::with_capacity(t);
     for (pos, &tok) in tokens.iter().enumerate() {
         let mut h = vec![0.0f32; n_embd];
@@ -42,14 +38,14 @@ pub fn forward_with_memory_gpu(
             (FfnWeights::KerrMaestro(_), _) => { ode_layer += 1; None }
             _ => None,
         };
-        hidden = forward_block_gpu(model, block, &hidden, mem, backend);
+        hidden = forward_block_gpu(model, block, &hidden, mem, gpu);
     }
 
-    // Final layer norm + LM head
+    // Final layer norm (CPU) + LM head (GPU)
     let mut logits = Vec::with_capacity(t);
     for h in &hidden {
         let normed = layer_norm_cpu(h, &model.ln_f.weight, &model.ln_f.bias);
-        let l = linear_no_bias_gpu(&model.lm_head, &normed, backend);
+        let l = gpu.linear_no_bias(&model.lm_head, &normed);
         logits.push(l);
     }
 
@@ -61,31 +57,29 @@ fn forward_block_gpu(
     block: &BlockWeights,
     hidden: &[Vec<f32>],
     memory: Option<(&[f32], &[f32])>,
-    backend: &dyn ComputeBackend,
+    gpu: &mut GpuAccelerator,
 ) -> Vec<Vec<f32>> {
     let t = hidden.len();
     let n_embd = model.config.n_embd();
 
-    // x = x + attn(ln_1(x))  — attention uses GPU for projections
+    // Attention: ln1 (CPU) → Q/K/V projection (GPU) → scores (CPU) → out_proj (GPU)
     let normed_1: Vec<Vec<f32>> = hidden.iter()
         .map(|h| layer_norm_cpu(h, &block.ln_1.weight, &block.ln_1.bias))
         .collect();
-    let attn_out = attention_gpu(model, &block.attn, &normed_1, backend);
+    let attn_out = attention_gpu(model, &block.attn, &normed_1, gpu);
     let mut h: Vec<Vec<f32>> = (0..t).map(|i| {
         let mut v = vec![0.0f32; n_embd];
         for j in 0..n_embd { v[j] = hidden[i][j] + attn_out[i][j]; }
         v
     }).collect();
 
-    // x = x + ffn(ln_2(x))  — Kerr-ODE stays CPU, projections use GPU
+    // FFN: ln2 (CPU) → Kerr-ODE (CPU) + Maestro projections (GPU) → out_proj (GPU)
     let normed_2: Vec<Vec<f32>> = h.iter()
         .map(|x| layer_norm_cpu(x, &block.ln_2.weight, &block.ln_2.bias))
         .collect();
     let ffn_out = match &block.ffn {
-        FfnWeights::PerBand(w) => model.per_band_linear(w, &normed_2),
-        FfnWeights::KerrMaestro(w) => {
-            kerr_maestro_gpu(model, w, &normed_2, memory, backend)
-        }
+        FfnWeights::PerBand(w) => per_band_gpu(w, &normed_2, gpu),
+        FfnWeights::KerrMaestro(w) => kerr_maestro_gpu(model, w, &normed_2, memory, gpu),
     };
     for i in 0..t {
         for j in 0..n_embd { h[i][j] += ffn_out[i][j]; }
@@ -99,20 +93,20 @@ fn attention_gpu(
     model: &ModelWeights,
     weights: &AttentionWeights,
     x: &[Vec<f32>],
-    backend: &dyn ComputeBackend,
+    gpu: &mut GpuAccelerator,
 ) -> Vec<Vec<f32>> {
     let t = x.len();
     let n_embd = model.config.n_embd();
     let n_head = weights.n_head;
     let head_dim = n_embd / n_head;
 
-    // Q/K/V projection via GPU matvec
+    // Q/K/V projection via GPU
     let mut q_all = vec![vec![0.0f32; n_embd]; t];
     let mut k_all = vec![vec![0.0f32; n_embd]; t];
     let mut v_all = vec![vec![0.0f32; n_embd]; t];
 
     for pos in 0..t {
-        let qkv = backend.linear(&weights.c_attn.w, &weights.c_attn.b, &x[pos]);
+        let qkv = gpu.linear(&weights.c_attn.w, &weights.c_attn.b, &x[pos]);
         for i in 0..n_embd {
             q_all[pos][i] = qkv[i];
             k_all[pos][i] = qkv[n_embd + i];
@@ -157,7 +151,33 @@ fn attention_gpu(
     // Output projection via GPU
     let mut result = Vec::with_capacity(t);
     for pos in 0..t {
-        result.push(backend.linear(&weights.c_proj.w, &weights.c_proj.b, &out[pos]));
+        result.push(gpu.linear(&weights.c_proj.w, &weights.c_proj.b, &out[pos]));
+    }
+    result
+}
+
+/// PerBandLinear with GPU output projection.
+fn per_band_gpu(
+    weights: &PerBandLinearWeights,
+    x: &[Vec<f32>],
+    gpu: &mut GpuAccelerator,
+) -> Vec<Vec<f32>> {
+    let t = x.len();
+    let n_bands = weights.band_w.len();
+    let n_embd = n_bands * 2;
+    let mut result = Vec::with_capacity(t);
+
+    for pos in 0..t {
+        let mut bands_out = vec![0.0f32; n_embd];
+        for band in 0..n_bands {
+            let r_in = x[pos][band * 2];
+            let s_in = x[pos][band * 2 + 1];
+            let w = &weights.band_w[band];
+            let b = &weights.band_b[band];
+            bands_out[band * 2] = w[0][0] * r_in + w[1][0] * s_in + b[0];
+            bands_out[band * 2 + 1] = w[0][1] * r_in + w[1][1] * s_in + b[1];
+        }
+        result.push(gpu.linear(&weights.out_proj.w, &weights.out_proj.b, &bands_out));
     }
     result
 }
@@ -168,38 +188,31 @@ fn kerr_maestro_gpu(
     weights: &KerrMaestroAddWeights,
     x: &[Vec<f32>],
     memory: Option<(&[f32], &[f32])>,
-    backend: &dyn ComputeBackend,
+    gpu: &mut GpuAccelerator,
 ) -> Vec<Vec<f32>> {
     let t = x.len();
     let mut result = Vec::with_capacity(t);
 
     for pos in 0..t {
-        // Kerr path (CPU — ODE integration, memory injection)
+        // Kerr path (CPU — ODE integration + memory injection)
         let kerr_out = model.kerr_ode_forward_with_memory(&weights.kerr, &x[pos], memory);
 
         // Maestro path (GPU for projections)
-        let squeezed = backend.linear(&weights.maestro.squeeze.w, &weights.maestro.squeeze.b, &x[pos]);
+        let squeezed = gpu.linear(&weights.maestro.squeeze.w, &weights.maestro.squeeze.b, &x[pos]);
         let activated: Vec<f32> = squeezed.iter().map(|&v| gelu(v)).collect();
-        let maestro_out = backend.linear(&weights.maestro.process_1.w, &weights.maestro.process_1.b, &activated);
+        let maestro_out = gpu.linear(&weights.maestro.process_1.w, &weights.maestro.process_1.b, &activated);
 
         // Combine + project (GPU)
         let n_embd = kerr_out.len();
         let mut combined = vec![0.0f32; n_embd];
         for i in 0..n_embd { combined[i] = kerr_out[i] + maestro_out[i]; }
 
-        let projected = backend.linear(&weights.out_proj.w, &weights.out_proj.b, &combined);
-        result.push(projected);
+        result.push(gpu.linear(&weights.out_proj.w, &weights.out_proj.b, &combined));
     }
-
     result
 }
 
-/// GPU-accelerated linear_no_bias (for lm_head).
-fn linear_no_bias_gpu(w: &[Vec<f32>], x: &[f32], backend: &dyn ComputeBackend) -> Vec<f32> {
-    backend.linear_no_bias(w, x)
-}
-
-/// CPU layer norm (not worth GPU overhead for a single vector normalisation).
+/// CPU layer norm (not worth GPU dispatch overhead for single vectors).
 fn layer_norm_cpu(x: &[f32], weight: &[f32], bias: &[f32]) -> Vec<f32> {
     let n = x.len();
     let mean: f32 = x.iter().sum::<f32>() / n as f32;
@@ -210,21 +223,8 @@ fn layer_norm_cpu(x: &[f32], weight: &[f32], bias: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// GELU activation (CPU — element-wise, trivial cost).
+/// GELU activation (CPU).
 fn gelu(x: f32) -> f32 {
     let cdf = 0.5 * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh());
     x * cdf
-}
-
-/// Create a GPU backend for inference. Returns None if GPU unavailable.
-pub fn create_gpu_backend(n_embd: usize) -> Option<Box<dyn ComputeBackend>> {
-    match std::panic::catch_unwind(|| {
-        backend::auto_select(n_embd, false, true, None)
-    }) {
-        Ok(b) => Some(b),
-        Err(_) => {
-            eprintln!("WARNING: GPU backend failed to initialise, falling back to CPU");
-            None
-        }
-    }
 }

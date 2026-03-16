@@ -7,11 +7,13 @@ description = "OpenAI-compatible API server for Kerr-ODE models"
 
 [features]
 default = []
-gpu = ["kerr-engine"]
+gpu = ["wgpu", "bytemuck", "pollster"]
 
 [dependencies]
-kerr-engine = { path = "../kerr-engine", optional = true }
 kerr-memory = { path = "../kerr-memory" }
+wgpu = { version = "24", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

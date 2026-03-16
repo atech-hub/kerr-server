@@ -19,6 +19,8 @@ mod rng;
 mod server;
 
 #[cfg(feature = "gpu")]
+mod gpu;
+#[cfg(feature = "gpu")]
 mod gpu_forward;
 
 use std::sync::Arc;
@@ -163,18 +165,10 @@ fn main() {
 
     // GPU inference setup
     #[cfg(feature = "gpu")]
-    let gpu_backend = if use_gpu {
-        println!("Initialising GPU backend...");
-        match gpu_forward::create_gpu_backend(model.config.n_embd()) {
-            Some(b) => {
-                println!("  GPU inference: ENABLED");
-                Some(server::SendableBackend(b))
-            }
-            None => {
-                eprintln!("  GPU initialisation failed, falling back to CPU");
-                None
-            }
-        }
+    let gpu_accel = if use_gpu {
+        println!("Initialising GPU...");
+        let max_dim = model.config.n_embd().max(model.vocab_size);
+        Some(gpu::GpuAccelerator::new(max_dim))
     } else { None };
 
     #[cfg(not(feature = "gpu"))]
@@ -190,7 +184,7 @@ fn main() {
         memory: std::sync::Mutex::new(memory),
         memory_path: memory_path.clone(),
         #[cfg(feature = "gpu")]
-        gpu_backend,
+        gpu: std::sync::Mutex::new(gpu_accel),
     });
 
     // Start tokio runtime and run server

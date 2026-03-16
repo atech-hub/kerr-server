@@ -135,27 +135,24 @@ async fn handle_non_streaming(
     let mem_offsets = get_memory_offsets(&state);
     let prompt_for_memory = prompt_tokens.clone();
 
-    // Check if GPU inference is available
     #[cfg(feature = "gpu")]
-    let has_gpu = state.gpu_backend.is_some();
-    #[cfg(not(feature = "gpu"))]
-    let has_gpu = false;
-
     let state_for_gpu = state.clone();
+    #[cfg(not(feature = "gpu"))]
+    let _ = &state; // suppress unused
 
     let result = tokio::task::spawn_blocking(move || {
         #[cfg(feature = "gpu")]
-        if has_gpu {
-            if let Some(ref backend) = state_for_gpu.gpu_backend {
+        {
+            let mut guard = state_for_gpu.gpu.lock().unwrap();
+            if let Some(ref mut gpu) = *guard {
                 return inference::generate_with_forward(
                     &model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref(),
                     |tokens, mem| {
-                        crate::gpu_forward::forward_with_memory_gpu(&model, tokens, mem, &*backend.0)
+                        crate::gpu_forward::forward_with_memory_gpu(&model, tokens, mem, gpu)
                     },
                 );
             }
         }
-        let _ = state_for_gpu; // suppress unused warning on non-gpu builds
         inference::generate(&model, &prompt_tokens, &config, &vocab, mem_offsets.as_ref())
     })
     .await
