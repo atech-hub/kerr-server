@@ -161,17 +161,26 @@ fn main() {
         None
     };
 
-    // GPU inference check
+    // GPU inference setup
+    #[cfg(feature = "gpu")]
+    let gpu_backend = if use_gpu {
+        println!("Initialising GPU backend...");
+        match gpu_forward::create_gpu_backend(model.config.n_embd()) {
+            Some(b) => {
+                println!("  GPU inference: ENABLED");
+                Some(server::SendableBackend(b))
+            }
+            None => {
+                eprintln!("  GPU initialisation failed, falling back to CPU");
+                None
+            }
+        }
+    } else { None };
+
     #[cfg(not(feature = "gpu"))]
     if use_gpu {
-        eprintln!("WARNING: --gpu flag requires server compiled with --features gpu");
-        eprintln!("  Rebuild with: cargo build --release --features gpu");
+        eprintln!("WARNING: --gpu requires: cargo build --release --features gpu");
         eprintln!("  Falling back to CPU inference.");
-    }
-
-    #[cfg(feature = "gpu")]
-    if use_gpu {
-        println!("  GPU inference: enabled (compiled with --features gpu)");
     }
 
     let app_state = Arc::new(AppState {
@@ -180,7 +189,8 @@ fn main() {
         config: ServerConfig { host, port, model_name, api_key },
         memory: std::sync::Mutex::new(memory),
         memory_path: memory_path.clone(),
-        use_gpu,
+        #[cfg(feature = "gpu")]
+        gpu_backend,
     });
 
     // Start tokio runtime and run server

@@ -76,6 +76,50 @@ pub fn generate(
     GenerationResult { tokens: generated, text }
 }
 
+/// Generate with a custom forward pass function (for GPU dispatch).
+pub fn generate_with_forward<F>(
+    model: &ModelWeights,
+    prompt_tokens: &[usize],
+    config: &GenerationConfig,
+    vocab: &Vocab,
+    memory: Option<&MemoryOffsets>,
+    mut forward_fn: F,
+) -> GenerationResult
+where
+    F: FnMut(&[usize], Option<&[(&[f32], &[f32])]>) -> Vec<Vec<f32>>,
+{
+    let mut rng = make_rng();
+    let block_size = model.config.block_size;
+    let mut tokens = prompt_tokens.to_vec();
+    let mut generated = Vec::new();
+
+    let offset_slices: Option<Vec<(&[f32], &[f32])>> = memory.map(|m|
+        m.offsets.iter().map(|(r, s)| (r.as_slice(), s.as_slice())).collect()
+    );
+    let mem_arg = offset_slices.as_deref();
+
+    for _ in 0..config.max_tokens {
+        let start = if tokens.len() > block_size { tokens.len() - block_size } else { 0 };
+        let context = &tokens[start..];
+
+        let logits_all = forward_fn(context, mem_arg);
+        let mut logits = logits_all.last().unwrap().clone();
+
+        if let Some(penalty) = config.repetition_penalty {
+            if penalty != 1.0 {
+                apply_repetition_penalty(&mut logits, &tokens, penalty);
+            }
+        }
+
+        let token = sample_token(&logits, config, &mut rng);
+        tokens.push(token);
+        generated.push(token);
+    }
+
+    let text = vocab.decode(&generated);
+    GenerationResult { tokens: generated, text }
+}
+
 /// Generate tokens one at a time, calling on_token for each.
 /// Returns false from on_token to stop early (e.g. client disconnect).
 pub fn generate_streaming<F>(

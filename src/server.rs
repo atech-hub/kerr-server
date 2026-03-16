@@ -15,6 +15,15 @@ use kerr_memory::memory::WaveMemory;
 use crate::model::ModelWeights;
 
 use crate::api_types::{ErrorResponse, ErrorDetail};
+
+/// Wrapper to make ComputeBackend Send+Sync for Axum's async handlers.
+/// Safe because CpuBackend is stateless and GpuBackend's wgpu handles are Send+Sync.
+#[cfg(feature = "gpu")]
+pub struct SendableBackend(pub Box<dyn kerr_engine::backend::ComputeBackend>);
+#[cfg(feature = "gpu")]
+unsafe impl Send for SendableBackend {}
+#[cfg(feature = "gpu")]
+unsafe impl Sync for SendableBackend {}
 use crate::handlers;
 use crate::prompt::Vocab;
 
@@ -27,8 +36,10 @@ pub struct AppState {
     pub memory: Mutex<Option<WaveMemory>>,
     /// Path to save memory file on shutdown (if memory is active).
     pub memory_path: Option<String>,
-    /// GPU inference enabled (requires --features gpu build).
-    pub use_gpu: bool,
+    /// GPU backend for accelerated inference — None if CPU-only.
+    #[cfg(feature = "gpu")]
+    pub gpu_backend: Option<SendableBackend>,
+
 }
 
 /// Server configuration from CLI.
